@@ -1,8 +1,12 @@
 package com.example.mydownloader
 
+import android.content.ContentValues
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.MediaStore
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
@@ -22,7 +26,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btn: Button
     private lateinit var openBtn: Button
     private lateinit var shareBtn: Button
-    private var lastDownloadedFile: File? = null
+    private var lastDownloadedUri: Uri? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,26 +75,29 @@ class MainActivity : AppCompatActivity() {
 
         thread {
             try {
-                val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                val tempDir = File(cacheDir, "ytdl").apply { deleteRecursively(); mkdirs() }
                 val request = YoutubeDLRequest(url).apply {
                     addOption("-f", "b[ext=mp4]/b")
-                    addOption("-o", "${dir.absolutePath}/%(title).50s.%(ext)s")
+                    addOption("-o", "${tempDir.absolutePath}/%(title).50s.%(ext)s")
                     addOption("--print", "after_move:filepath")
                 }
                 val response = YoutubeDL.getInstance().execute(request)
                 val path = response.out.trim().lines().lastOrNull()?.trim().orEmpty()
-                val file = File(path)
+                val tempFile = File(path).takeIf { it.exists() } ?: tempDir.listFiles()?.firstOrNull()
+
+                if (tempFile == null || !tempFile.exists()) {
+                    throw Exception("No file produced by yt-dlp")
+                }
+
+                val savedUri = saveToDownloads(tempFile)
+                tempFile.delete()
 
                 runOnUiThread {
                     btn.isEnabled = true
-                    if (file.exists()) {
-                        lastDownloadedFile = file
-                        status.text = "Saved: ${file.name}"
-                        openBtn.visibility = View.VISIBLE
-                        shareBtn.visibility = View.VISIBLE
-                    } else {
-                        status.text = "Saved to Downloads!"
-                    }
+                    lastDownloadedUri = savedUri
+                    status.text = "Saved: ${tempFile.name}"
+                    openBtn.visibility = View.VISIBLE
+                    shareBtn.visibility = View.VISIBLE
                 }
             } catch (e: Exception) {
                 runOnUiThread {
@@ -101,20 +108,37 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun openOrShareFile(share: Boolean) {
-        val file = lastDownloadedFile ?: return
-        val uri = FileProvider.getUriForFile(this, "${packageName}.provider", file)
-        val mime = contentResolver.getType(uri) ?: "video/*"
+    private fun saveToDownloads(file: File): Uri {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
+                put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            }
+            val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw Exception("Failed to create MediaStore entry")
+            contentResolver.openOutputStream(uri)?.use { out ->
+                file.inputStream().use { it.copyTo(out) }
+            }
+            return uri
+        } else {
+            val dest = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), file.name)
+            file.copyTo(dest, overwrite = true)
+            return FileProvider.getUriForFile(this, "${packageName}.provider", dest)
+        }
+    }
 
+    private fun openOrShareFile(share: Boolean) {
+        val uri = lastDownloadedUri ?: return
         val intent = if (share) {
             Intent(Intent.ACTION_SEND).apply {
-                type = mime
+                type = "video/mp4"
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }.let { Intent.createChooser(it, "Share video") }
         } else {
             Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, mime)
+                setDataAndType(uri, "video/mp4")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
         }
