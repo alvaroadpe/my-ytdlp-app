@@ -24,18 +24,22 @@ import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import java.io.File
+import java.util.UUID
 import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity() {
     private lateinit var input: EditText
     private lateinit var status: TextView
     private lateinit var btn: Button
+    private lateinit var cancelBtn: Button
     private lateinit var updateBtn: Button
     private lateinit var cookiesBtn: Button
     private lateinit var openBtn: Button
     private lateinit var shareBtn: Button
     private lateinit var progressBar: ProgressBar
     private var lastDownloadedUri: Uri? = null
+    private var currentProcessId: String? = null
+    @Volatile private var engineReady = false
 
     private val cookieFile: File
         get() = File(filesDir, "cookies.txt")
@@ -54,29 +58,30 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        YoutubeDL.getInstance().init(this)
-        FFmpeg.getInstance().init(this)
 
         input = EditText(this).apply { hint = "Paste link here" }
-        btn = Button(this).apply { text = "Download" }
-        updateBtn = Button(this).apply { text = "Update yt-dlp" }
+        btn = Button(this).apply { text = "Download"; isEnabled = false }
+        cancelBtn = Button(this).apply { text = "Cancel"; visibility = View.GONE }
+        updateBtn = Button(this).apply { text = "Update yt-dlp"; isEnabled = false }
         cookiesBtn = Button(this)
         updateCookiesButtonText()
         openBtn = Button(this).apply { text = "Open File"; visibility = View.GONE }
         shareBtn = Button(this).apply { text = "Share File"; visibility = View.GONE }
-        
-        // Circular indeterminate progress loading spinner
-        progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleLarge).apply {
+
+        progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progress = 0
             visibility = View.GONE
         }
-        
-        status = TextView(this).apply { text = "Ready (saves to Download/MyDownloader)" }
+
+        status = TextView(this).apply { text = "Initializing engine..." }
 
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 48, 48, 48)
             addView(input)
             addView(btn)
+            addView(cancelBtn)
             addView(progressBar)
             addView(updateBtn)
             addView(cookiesBtn)
@@ -91,17 +96,43 @@ class MainActivity : AppCompatActivity() {
             if (url.isNotEmpty()) startDownload(url)
         }
 
+        cancelBtn.setOnClickListener {
+            currentProcessId?.let { id ->
+                try {
+                    YoutubeDL.getInstance().destroyProcessById(id)
+                } catch (_: Exception) {}
+            }
+        }
+
         updateBtn.setOnClickListener { updateYtDlp() }
         cookiesBtn.setOnClickListener { pickCookiesLauncher.launch(arrayOf("text/*", "*/*")) }
         openBtn.setOnClickListener { openOrShareFile(share = false) }
         shareBtn.setOnClickListener { openOrShareFile(share = true) }
 
-        if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
+        val sharedUrl = if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
             val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT) ?: ""
-            val extractedUrl = Regex("https?://\\S+").find(sharedText)?.value
-            if (extractedUrl != null) {
-                input.setText(extractedUrl)
-                startDownload(extractedUrl)
+            Regex("https?://\\S+").find(sharedText)?.value
+        } else null
+
+        if (sharedUrl != null) {
+            input.setText(sharedUrl)
+        }
+
+        thread {
+            try {
+                YoutubeDL.getInstance().init(applicationContext)
+                FFmpeg.getInstance().init(applicationContext)
+                engineReady = true
+                runOnUiThread {
+                    btn.isEnabled = true
+                    updateBtn.isEnabled = true
+                    status.text = "Ready (saves to Download/MyDownloader)"
+                    if (sharedUrl != null) startDownload(sharedUrl)
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    status.text = "Init error: ${e.message}"
+                }
             }
         }
     }
@@ -111,21 +142,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateYtDlp() {
+        if (!engineReady) return
         updateBtn.isEnabled = false
+        btn.isEnabled = false
         progressBar.visibility = View.VISIBLE
+        progressBar.isIndeterminate = true
         status.text = "Updating yt-dlp..."
         thread {
             try {
                 val updateStatus = YoutubeDL.getInstance().updateYoutubeDL(this, YoutubeDL.UpdateChannel.NIGHTLY)
                 runOnUiThread {
-                    status.text = "yt-dlp update status: $updateStatus"
+                    status.text = "yt-dlp update: $updateStatus"
                     updateBtn.isEnabled = true
+                    btn.isEnabled = true
                     progressBar.visibility = View.GONE
                 }
             } catch (e: Exception) {
                 runOnUiThread {
                     status.text = "Update failed: ${e.message}"
                     updateBtn.isEnabled = true
+                    btn.isEnabled = true
                     progressBar.visibility = View.GONE
                 }
             }
@@ -159,11 +195,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startDownload(url: String) {
+        if (!engineReady) return
+        val processId = UUID.randomUUID().toString()
+        currentProcessId = processId
+
         btn.isEnabled = false
+        updateBtn.isEnabled = false
+        cancelBtn.visibility = View.VISIBLE
         openBtn.visibility = View.GONE
         shareBtn.visibility = View.GONE
         progressBar.visibility = View.VISIBLE
-        status.text = "Downloading..."
+        progressBar.isIndeterminate = true
+        progressBar.progress = 0
+        status.text = "Connecting..."
 
         thread {
             try {
@@ -171,13 +215,27 @@ class MainActivity : AppCompatActivity() {
                 val request = YoutubeDLRequest(url).apply {
                     addOption("-f", "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b")
                     addOption("--merge-output-format", "mp4")
+                    addOption("--socket-timeout", "15")
+                    addOption("--retries", "3")
                     addOption("-o", "${tempDir.absolutePath}/%(title).50s.%(ext)s")
                     addOption("--print", "after_move:filepath")
                     if (cookieFile.exists()) {
                         addOption("--cookies", cookieFile.absolutePath)
                     }
                 }
-                val response = YoutubeDL.getInstance().execute(request)
+
+                val response = YoutubeDL.getInstance().execute(request, processId) { progress, _, line ->
+                    runOnUiThread {
+                        if (progress >= 0f) {
+                            progressBar.isIndeterminate = false
+                            progressBar.progress = progress.toInt()
+                        }
+                        if (line.isNotBlank()) {
+                            status.text = line.trim()
+                        }
+                    }
+                }
+
                 val path = response.out.trim().lines().lastOrNull()?.trim().orEmpty()
                 val tempFile = File(path).takeIf { it.exists() } ?: tempDir.listFiles()?.firstOrNull()
 
@@ -189,7 +247,11 @@ class MainActivity : AppCompatActivity() {
                 tempFile.delete()
 
                 runOnUiThread {
+                    currentProcessId = null
                     btn.isEnabled = true
+                    updateBtn.isEnabled = true
+                    cancelBtn.visibility = View.GONE
+                    progressBar.progress = 100
                     progressBar.visibility = View.GONE
                     lastDownloadedUri = savedUri
                     status.text = "Saved to Download/MyDownloader:\n${tempFile.name}"
@@ -198,8 +260,11 @@ class MainActivity : AppCompatActivity() {
                 }
             } catch (e: Exception) {
                 runOnUiThread {
-                    status.text = "Error: ${e.message}"
+                    currentProcessId = null
+                    status.text = "Stopped/Error: ${e.message}"
                     btn.isEnabled = true
+                    updateBtn.isEnabled = true
+                    cancelBtn.visibility = View.GONE
                     progressBar.visibility = View.GONE
                 }
             }
