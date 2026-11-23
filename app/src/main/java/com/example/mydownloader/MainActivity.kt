@@ -107,7 +107,8 @@ class MainActivity : AppCompatActivity() {
             try {
                 val tempDir = File(cacheDir, "ytdl").apply { deleteRecursively(); mkdirs() }
                 val request = YoutubeDLRequest(url).apply {
-                    addOption("-f", "b[ext=mp4]/b")
+                    addOption("-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b") 
+                    addOption("--merge-output-format", "mp4")
                     addOption("-o", "${tempDir.absolutePath}/%(title).50s.%(ext)s")
                     addOption("--print", "after_move:filepath")
                 }
