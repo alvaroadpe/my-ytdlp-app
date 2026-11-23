@@ -18,8 +18,10 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.MediaStore
-import android.text.TextUtils
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.Menu
 import android.view.MenuItem
@@ -53,6 +55,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var clearBtn: Button
     private lateinit var qualitySwitch: SwitchCompat
     private lateinit var qualitySubtext: TextView
+    private lateinit var audioOnlySwitch: SwitchCompat
+    private lateinit var audioSubtext: TextView
     private lateinit var downloadBtn: Button
     private lateinit var cancelBtn: Button
     private lateinit var progressCard: LinearLayout
@@ -66,8 +70,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var drawerCookiesBtn: Button
 
     private var lastDownloadedUri: Uri? = null
+    private var lastDownloadedMime: String = "video/mp4"
     private var currentProcessId: String? = null
     @Volatile private var engineReady = false
+    @Volatile private var isDownloading = false
 
     private val channelId = "mydownloader_progress"
     private val notificationId = 1001
@@ -109,7 +115,6 @@ class MainActivity : AppCompatActivity() {
 
         drawerLayout = DrawerLayout(this).apply { setBackgroundColor(bgMain) }
 
-        // Main Root
         val mainContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = DrawerLayout.LayoutParams(DrawerLayout.LayoutParams.MATCH_PARENT, DrawerLayout.LayoutParams.MATCH_PARENT)
@@ -166,8 +171,8 @@ class MainActivity : AppCompatActivity() {
         inputCard.addView(input)
         inputCard.addView(clearBtn)
 
-        // 2. Quality Toggle Card
-        val qualityCard = LinearLayout(this).apply {
+        // 2. Format & Quality Options Card
+        val optionsCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = cardBg()
             setPadding(dp(16), dp(14), dp(16), dp(14))
@@ -176,27 +181,64 @@ class MainActivity : AppCompatActivity() {
             }
         }
         qualitySwitch = SwitchCompat(this).apply {
-            text = "Max Resolution"
+            text = "Fast download"
             setTextColor(ink)
             textSize = 15f
             typeface = Typeface.DEFAULT_BOLD
             isChecked = false
         }
         qualitySubtext = TextView(this).apply {
-            text = "Off: Fast single-stream MP4 download"
+            text = "Single-stream MP4 for speed"
             setTextColor(muted)
             textSize = 12f
-            setPadding(0, dp(4), 0, 0)
+            setPadding(0, dp(2), 0, dp(12))
         }
+
+        val innerDivider = View(this).apply {
+            setBackgroundColor(border)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
+        }
+
+        audioOnlySwitch = SwitchCompat(this).apply {
+            text = "Audio only (MP3)"
+            setTextColor(ink)
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            isChecked = false
+            setPadding(0, dp(12), 0, 0)
+        }
+        audioSubtext = TextView(this).apply {
+            text = "Download full video with audio"
+            setTextColor(muted)
+            textSize = 12f
+            setPadding(0, dp(2), 0, 0)
+        }
+
         qualitySwitch.setOnCheckedChangeListener { _, isChecked ->
+            qualitySwitch.text = if (isChecked) "Max quality" else "Fast download"
             qualitySubtext.text = if (isChecked) {
-                "On: Best video + audio merged via FFmpeg"
+                "Best video + audio merged via FFmpeg"
             } else {
-                "Off: Fast single-stream MP4 download"
+                "Single-stream MP4 for speed"
             }
+            resetDownloadedButtonLabel()
         }
-        qualityCard.addView(qualitySwitch)
-        qualityCard.addView(qualitySubtext)
+
+        audioOnlySwitch.setOnCheckedChangeListener { _, isChecked ->
+            qualitySwitch.isEnabled = !isChecked && !isDownloading
+            audioSubtext.text = if (isChecked) {
+                "Extract audio track only as .mp3"
+            } else {
+                "Download full video with audio"
+            }
+            resetDownloadedButtonLabel()
+        }
+
+        optionsCard.addView(qualitySwitch)
+        optionsCard.addView(qualitySubtext)
+        optionsCard.addView(innerDivider)
+        optionsCard.addView(audioOnlySwitch)
+        optionsCard.addView(audioSubtext)
 
         // 3. Primary Download / Cancel Row
         val primaryRow = LinearLayout(this).apply {
@@ -298,7 +340,7 @@ class MainActivity : AppCompatActivity() {
         actionsRow.addView(openBtn)
         actionsRow.addView(shareBtn)
 
-        // 6. Status Log Box
+        // 6. Status Log
         statusText = TextView(this).apply {
             text = "Initializing engine..."
             setTextColor(muted)
@@ -307,7 +349,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         contentLayout.addView(inputCard)
-        contentLayout.addView(qualityCard)
+        contentLayout.addView(optionsCard)
         contentLayout.addView(primaryRow)
         contentLayout.addView(progressCard)
         contentLayout.addView(actionsRow)
@@ -371,18 +413,29 @@ class MainActivity : AppCompatActivity() {
         drawerLayout.addView(drawerMenu)
         setContentView(drawerLayout)
 
-        // Click Listeners
+        input.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                resetDownloadedButtonLabel()
+            }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+
         clearBtn.setOnClickListener {
             input.setText("")
             actionsRow.visibility = View.GONE
             progressCard.visibility = View.GONE
+            if (!isDownloading) {
+                downloadBtn.isEnabled = engineReady
+                downloadBtn.text = "Download"
+            }
             statusText.text = "Ready"
             input.requestFocus()
         }
 
         downloadBtn.setOnClickListener {
             val url = input.text.toString().trim()
-            if (url.isNotEmpty()) startDownload(url)
+            if (url.isNotEmpty() && !isDownloading) startDownload(url)
         }
 
         cancelBtn.setOnClickListener {
@@ -404,8 +457,16 @@ class MainActivity : AppCompatActivity() {
         openBtn.setOnClickListener { openOrShareFile(share = false) }
         shareBtn.setOnClickListener { openOrShareFile(share = true) }
 
+        if (intent?.getBooleanExtra("open_folder", false) == true) {
+            openMyDownloaderFolder()
+        }
+
         val sharedUrl = extractUrlFromIntent(intent)
-        if (sharedUrl != null) input.setText(sharedUrl)
+        if (sharedUrl != null) {
+            input.setText(sharedUrl)
+            downloadBtn.isEnabled = false
+            downloadBtn.text = "Downloading"
+        }
 
         thread {
             try {
@@ -413,14 +474,27 @@ class MainActivity : AppCompatActivity() {
                 FFmpeg.getInstance().init(applicationContext)
                 engineReady = true
                 runOnUiThread {
-                    downloadBtn.isEnabled = true
                     drawerUpdateBtn.isEnabled = true
-                    statusText.text = "Ready • Saves to Download/MyDownloader"
-                    if (sharedUrl != null) startDownload(sharedUrl)
+                    if (sharedUrl != null) {
+                        startDownload(sharedUrl)
+                    } else {
+                        downloadBtn.isEnabled = true
+                        downloadBtn.text = "Download"
+                        statusText.text = "Ready • Saves to Download/MyDownloader"
+                    }
                 }
             } catch (e: Exception) {
-                runOnUiThread { statusText.text = "Init error: ${e.message}" }
+                runOnUiThread {
+                    downloadBtn.text = "Download"
+                    statusText.text = "Init error: ${e.message}"
+                }
             }
+        }
+    }
+
+    private fun resetDownloadedButtonLabel() {
+        if (!isDownloading && engineReady && downloadBtn.text == "Downloaded") {
+            downloadBtn.text = "Download"
         }
     }
 
@@ -439,9 +513,14 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val sharedUrl = extractUrlFromIntent(intent)
-        if (sharedUrl != null && engineReady) {
+        if (sharedUrl != null && !isDownloading) {
             input.setText(sharedUrl)
-            startDownload(sharedUrl)
+            if (engineReady) {
+                startDownload(sharedUrl)
+            } else {
+                downloadBtn.isEnabled = false
+                downloadBtn.text = "Downloading"
+            }
         }
     }
 
@@ -467,20 +546,44 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openMyDownloaderFolder() {
-        val folderUri = Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload%2FMyDownloader")
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(folderUri, "vnd.android.document/directory")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val docUri = DocumentsContract.buildDocumentUri(
+            "com.android.externalstorage.documents",
+            "primary:Download/MyDownloader"
+        )
+        for (pkg in listOf("com.google.android.documentsui", "com.android.documentsui")) {
+            try {
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(docUri, DocumentsContract.Document.MIME_TYPE_DIR)
+                    setPackage(pkg)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(intent)
+                return
+            } catch (_: Exception) {}
         }
         try {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(docUri, DocumentsContract.Document.MIME_TYPE_DIR)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
             startActivity(intent)
-        } catch (_: Exception) {
-            startActivity(Intent(DownloadManager.ACTION_VIEW_DOWNLOADS))
+            return
+        } catch (_: Exception) {}
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                val treeIntent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                    putExtra(DocumentsContract.EXTRA_INITIAL_URI, docUri)
+                }
+                startActivity(treeIntent)
+                return
+            } catch (_: Exception) {}
         }
+        startActivity(Intent(DownloadManager.ACTION_VIEW_DOWNLOADS))
     }
 
     private fun updateYtDlp() {
-        if (!engineReady) return
+        if (!engineReady || isDownloading) return
         drawerUpdateBtn.isEnabled = false
         downloadBtn.isEnabled = false
         progressCard.visibility = View.VISIBLE
@@ -508,13 +611,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startDownload(url: String) {
-        if (!engineReady) return
+        if (!engineReady || isDownloading) return
+        isDownloading = true
         val processId = UUID.randomUUID().toString()
         currentProcessId = processId
         val maxQuality = qualitySwitch.isChecked
+        val audioOnly = audioOnlySwitch.isChecked
 
         downloadBtn.isEnabled = false
+        downloadBtn.text = "Downloading"
         qualitySwitch.isEnabled = false
+        audioOnlySwitch.isEnabled = false
         drawerUpdateBtn.isEnabled = false
         cancelBtn.visibility = View.VISIBLE
         actionsRow.visibility = View.GONE
@@ -529,7 +636,11 @@ class MainActivity : AppCompatActivity() {
             try {
                 val tempDir = File(cacheDir, "ytdl").apply { deleteRecursively(); mkdirs() }
                 val request = YoutubeDLRequest(url).apply {
-                    if (maxQuality) {
+                    if (audioOnly) {
+                        addOption("-x")
+                        addOption("--audio-format", "mp3")
+                        addOption("--audio-quality", "0")
+                    } else if (maxQuality) {
                         addOption("-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b")
                         addOption("--merge-output-format", "mp4")
                     } else {
@@ -564,32 +675,40 @@ class MainActivity : AppCompatActivity() {
                 val tempFile = File(path).takeIf { it.exists() } ?: tempDir.listFiles()?.firstOrNull()
                 if (tempFile == null || !tempFile.exists()) throw Exception("No file produced by yt-dlp")
 
-                val savedUri = saveToMyDownloaderFolder(tempFile)
+                val mimeType = if (tempFile.extension.equals("mp3", ignoreCase = true)) "audio/mpeg" else "video/mp4"
+                val savedUri = saveToMyDownloaderFolder(tempFile, mimeType)
                 val savedName = tempFile.name
                 tempFile.delete()
 
-                showCompletedNotification(savedName, savedUri)
+                showCompletedNotification(savedName, savedUri, mimeType)
 
                 runOnUiThread {
+                    isDownloading = false
                     currentProcessId = null
                     downloadBtn.isEnabled = true
-                    qualitySwitch.isEnabled = true
+                    downloadBtn.text = "Downloaded"
+                    audioOnlySwitch.isEnabled = true
+                    qualitySwitch.isEnabled = !audioOnlySwitch.isChecked
                     drawerUpdateBtn.isEnabled = true
                     cancelBtn.visibility = View.GONE
                     progressBar.isIndeterminate = false
                     progressBar.progress = 100
                     progressText.text = "100%"
                     lastDownloadedUri = savedUri
+                    lastDownloadedMime = mimeType
                     statusText.text = "Saved: $savedName"
                     actionsRow.visibility = View.VISIBLE
                 }
             } catch (e: Exception) {
                 showErrorNotification(e.message ?: "Download error")
                 runOnUiThread {
+                    isDownloading = false
                     currentProcessId = null
                     statusText.text = "Error: ${e.message}"
                     downloadBtn.isEnabled = true
-                    qualitySwitch.isEnabled = true
+                    downloadBtn.text = "Download"
+                    audioOnlySwitch.isEnabled = true
+                    qualitySwitch.isEnabled = !audioOnlySwitch.isChecked
                     drawerUpdateBtn.isEnabled = true
                     cancelBtn.visibility = View.GONE
                     progressCard.visibility = View.GONE
@@ -598,12 +717,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun saveToMyDownloaderFolder(file: File): Uri {
+    private fun saveToMyDownloaderFolder(file: File, mimeType: String): Uri {
         val relativeFolder = "${Environment.DIRECTORY_DOWNLOADS}/MyDownloader"
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
-                put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
                 put(MediaStore.MediaColumns.RELATIVE_PATH, relativeFolder)
             }
             val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
@@ -622,13 +741,13 @@ class MainActivity : AppCompatActivity() {
         val uri = lastDownloadedUri ?: return
         val intent = if (share) {
             Intent(Intent.ACTION_SEND).apply {
-                type = "video/mp4"
+                type = lastDownloadedMime
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }.let { Intent.createChooser(it, "Share video") }
+            }.let { Intent.createChooser(it, "Share file") }
         } else {
             Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "video/mp4")
+                setDataAndType(uri, lastDownloadedMime)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
         }
@@ -658,13 +777,13 @@ class MainActivity : AppCompatActivity() {
         nm.notify(notificationId, notif)
     }
 
-    private fun showCompletedNotification(fileName: String, fileUri: Uri) {
+    private fun showCompletedNotification(fileName: String, fileUri: Uri, mimeType: String) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(fileUri, "video/mp4")
+            setDataAndType(fileUri, mimeType)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        val openFilePending = PendingIntent.getActivity(this, 1, Intent.createChooser(viewIntent, "Open video"), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val openFilePending = PendingIntent.getActivity(this, 1, Intent.createChooser(viewIntent, "Open file"), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val openFolderPending = PendingIntent.getActivity(this, 2, Intent(this, MainActivity::class.java).apply { putExtra("open_folder", true) }, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
         val notif = NotificationCompat.Builder(this, channelId)
