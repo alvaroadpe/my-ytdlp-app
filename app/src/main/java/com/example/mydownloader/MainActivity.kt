@@ -1,5 +1,6 @@
 package com.example.mydownloader
 
+import android.app.DownloadManager
 import android.content.ContentValues
 import android.content.Intent
 import android.net.Uri
@@ -7,6 +8,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
@@ -34,7 +37,7 @@ class MainActivity : AppCompatActivity() {
         FFmpeg.getInstance().init(this)
 
         input = EditText(this).apply { hint = "Paste link here" }
-        status = TextView(this).apply { text = "Ready" }
+        status = TextView(this).apply { text = "Ready (saves to Download/MyDownloader)" }
         btn = Button(this).apply { text = "Download" }
         openBtn = Button(this).apply { text = "Open File"; visibility = View.GONE }
         shareBtn = Button(this).apply { text = "Share File"; visibility = View.GONE }
@@ -67,6 +70,33 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menu.add(0, 1, 0, "Open Folder")
+            .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        if (item.itemId == 1) {
+            openMyDownloaderFolder()
+            return true
+        }
+        return super.onOptionsItemSelected(item)
+    }
+
+    private fun openMyDownloaderFolder() {
+        val folderUri = Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload%2FMyDownloader")
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(folderUri, "vnd.android.document/directory")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            startActivity(Intent(DownloadManager.ACTION_VIEW_DOWNLOADS))
+        }
+    }
+
     private fun startDownload(url: String) {
         btn.isEnabled = false
         openBtn.visibility = View.GONE
@@ -89,13 +119,13 @@ class MainActivity : AppCompatActivity() {
                     throw Exception("No file produced by yt-dlp")
                 }
 
-                val savedUri = saveToDownloads(tempFile)
+                val savedUri = saveToMyDownloaderFolder(tempFile)
                 tempFile.delete()
 
                 runOnUiThread {
                     btn.isEnabled = true
                     lastDownloadedUri = savedUri
-                    status.text = "Saved: ${tempFile.name}"
+                    status.text = "Saved to Download/MyDownloader:\n${tempFile.name}"
                     openBtn.visibility = View.VISIBLE
                     shareBtn.visibility = View.VISIBLE
                 }
@@ -108,12 +138,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun saveToDownloads(file: File): Uri {
+    private fun saveToMyDownloaderFolder(file: File): Uri {
+        val relativeFolder = "${Environment.DIRECTORY_DOWNLOADS}/MyDownloader"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
                 put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
-                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, relativeFolder)
             }
             val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: throw Exception("Failed to create MediaStore entry")
@@ -122,7 +153,8 @@ class MainActivity : AppCompatActivity() {
             }
             return uri
         } else {
-            val dest = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), file.name)
+            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "MyDownloader").apply { mkdirs() }
+            val dest = File(dir, file.name)
             file.copyTo(dest, overwrite = true)
             return FileProvider.getUriForFile(this, "${packageName}.provider", dest)
         }
