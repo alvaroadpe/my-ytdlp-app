@@ -56,6 +56,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var qualitySubtext: TextView
     private lateinit var audioOnlySwitch: SwitchCompat
     private lateinit var audioSubtext: TextView
+    private lateinit var autoOpenSwitch: SwitchCompat
+    private lateinit var autoOpenSubtext: TextView
     private lateinit var downloadBtn: Button
     private lateinit var cancelBtn: Button
     private lateinit var progressCard: LinearLayout
@@ -77,6 +79,7 @@ class MainActivity : AppCompatActivity() {
     private val channelId = "mydownloader_progress"
     private val notificationId = 1001
     private val cookieFile: File get() = File(filesDir, "cookies.txt")
+    private val prefs by lazy { getSharedPreferences("mydownloader_prefs", Context.MODE_PRIVATE) }
 
     private val requestNotifPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -170,7 +173,7 @@ class MainActivity : AppCompatActivity() {
         inputCard.addView(input)
         inputCard.addView(clearBtn)
 
-        // 2. Format & Quality Options Card
+        // 2. Format, Quality & Behavior Options Card
         val optionsCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = cardBg()
@@ -193,7 +196,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dp(2), 0, dp(12))
         }
 
-        val innerDivider = View(this).apply {
+        val dividerOne = View(this).apply {
             setBackgroundColor(border)
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
         }
@@ -208,6 +211,27 @@ class MainActivity : AppCompatActivity() {
         }
         audioSubtext = TextView(this).apply {
             text = "Download full video with audio"
+            setTextColor(muted)
+            textSize = 12f
+            setPadding(0, dp(2), 0, dp(12))
+        }
+
+        val dividerTwo = View(this).apply {
+            setBackgroundColor(border)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
+        }
+
+        val savedAutoOpen = prefs.getBoolean("auto_open", false)
+        autoOpenSwitch = SwitchCompat(this).apply {
+            text = "Open when downloaded"
+            setTextColor(ink)
+            textSize = 15f
+            typeface = Typeface.DEFAULT_BOLD
+            isChecked = savedAutoOpen
+            setPadding(0, dp(12), 0, 0)
+        }
+        autoOpenSubtext = TextView(this).apply {
+            text = if (savedAutoOpen) "Launch file automatically on finish" else "Stay in app after download"
             setTextColor(muted)
             textSize = 12f
             setPadding(0, dp(2), 0, 0)
@@ -233,11 +257,23 @@ class MainActivity : AppCompatActivity() {
             resetDownloadedButtonLabel()
         }
 
+        autoOpenSwitch.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean("auto_open", isChecked).apply()
+            autoOpenSubtext.text = if (isChecked) {
+                "Launch file automatically on finish"
+            } else {
+                "Stay in app after download"
+            }
+        }
+
         optionsCard.addView(qualitySwitch)
         optionsCard.addView(qualitySubtext)
-        optionsCard.addView(innerDivider)
+        optionsCard.addView(dividerOne)
         optionsCard.addView(audioOnlySwitch)
         optionsCard.addView(audioSubtext)
+        optionsCard.addView(dividerTwo)
+        optionsCard.addView(autoOpenSwitch)
+        optionsCard.addView(autoOpenSubtext)
 
         // 3. Primary Download / Cancel Row
         val primaryRow = LinearLayout(this).apply {
@@ -580,11 +616,13 @@ class MainActivity : AppCompatActivity() {
         currentProcessId = processId
         val maxQuality = qualitySwitch.isChecked
         val audioOnly = audioOnlySwitch.isChecked
+        val shouldAutoOpen = autoOpenSwitch.isChecked
 
         downloadBtn.isEnabled = false
         downloadBtn.text = "Downloading"
         qualitySwitch.isEnabled = false
         audioOnlySwitch.isEnabled = false
+        autoOpenSwitch.isEnabled = false
         drawerUpdateBtn.isEnabled = false
         cancelBtn.visibility = View.VISIBLE
         actionsRow.visibility = View.GONE
@@ -609,6 +647,7 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         addOption("-f", "b[ext=mp4]/b")
                     }
+                    addOption("--extractor-args", "youtube:player_client=android,web")
                     addOption("--socket-timeout", "15")
                     addOption("--retries", "3")
                     addOption("-o", "${tempDir.absolutePath}/%(title).50s.%(ext)s")
@@ -652,6 +691,7 @@ class MainActivity : AppCompatActivity() {
                     downloadBtn.text = "Downloaded"
                     audioOnlySwitch.isEnabled = true
                     qualitySwitch.isEnabled = !audioOnlySwitch.isChecked
+                    autoOpenSwitch.isEnabled = true
                     drawerUpdateBtn.isEnabled = true
                     cancelBtn.visibility = View.GONE
                     progressBar.isIndeterminate = false
@@ -661,6 +701,9 @@ class MainActivity : AppCompatActivity() {
                     lastDownloadedMime = mimeType
                     statusText.text = "Saved: $savedName"
                     actionsRow.visibility = View.VISIBLE
+                    if (shouldAutoOpen) {
+                        openOrShareFile(share = false)
+                    }
                 }
             } catch (e: Exception) {
                 showErrorNotification(e.message ?: "Download error")
@@ -672,6 +715,7 @@ class MainActivity : AppCompatActivity() {
                     downloadBtn.text = "Download"
                     audioOnlySwitch.isEnabled = true
                     qualitySwitch.isEnabled = !audioOnlySwitch.isChecked
+                    autoOpenSwitch.isEnabled = true
                     drawerUpdateBtn.isEnabled = true
                     cancelBtn.visibility = View.GONE
                     progressCard.visibility = View.GONE
@@ -714,7 +758,11 @@ class MainActivity : AppCompatActivity() {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
         }
-        startActivity(intent)
+        try {
+            startActivity(intent)
+        } catch (_: Exception) {
+            statusText.text = "No app found to handle this file"
+        }
     }
 
     private fun createNotificationChannel() {
