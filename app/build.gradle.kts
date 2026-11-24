@@ -36,4 +36,5 @@ dependencies {
     implementation("io.github.junkfood02.youtubedl-android:library:$ytdlVersion")
     implementation("io.github.junkfood02.youtubedl-android:ffmpeg:$ytdlVersion")
     implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.drawerlayout:drawerlayout:1.2.0")
 }
