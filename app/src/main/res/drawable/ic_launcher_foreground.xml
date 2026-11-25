@@ -1,13 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:pathData="M54,37 L54,58 M44,49 L54,59 L64,49 M36,62 L36,68 Q36,71 39,71 L69,71 Q72,71 72,68 L72,62"
-        android:strokeColor="#000000"
-        android:strokeWidth="4.5"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round" />
-</vector>
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/goblin_icon"
+    android:inset="18dp" />
