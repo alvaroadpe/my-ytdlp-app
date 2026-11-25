@@ -9,5 +9,5 @@ dependencyResolutionManagement {
         maven { url = uri("https://jitpack.io") }
     }
 }
-rootProject.name = "MyDownloader"
+rootProject.name = "Download Goblin"
 include(":app")
