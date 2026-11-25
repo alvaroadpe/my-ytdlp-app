@@ -124,7 +124,7 @@ class MainActivity : AppCompatActivity() {
 
         val toolbar = Toolbar(this).apply {
             setBackgroundColor(surface)
-            title = "MyDownloader"
+            title = "Download Goblin"
             setTitleTextColor(ink)
             elevation = 0f
         }
@@ -513,7 +513,7 @@ class MainActivity : AppCompatActivity() {
                     statusText.text = if (sharedUrl != null) {
                         "Link pasted • Choose options and tap Download"
                     } else {
-                        "Ready • Saves to Download/MyDownloader"
+                        "Ready • Saves to Download/Download Goblin"
                     }
                 }
             } catch (e: Exception) {
@@ -725,7 +725,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveToMyDownloaderFolder(file: File, mimeType: String): Uri {
-        val relativeFolder = "${Environment.DIRECTORY_DOWNLOADS}/MyDownloader"
+        val relativeFolder = "${Environment.DIRECTORY_DOWNLOADS}/Download Goblin"
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, file.name)
@@ -737,7 +737,7 @@ class MainActivity : AppCompatActivity() {
             contentResolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } }
             uri
         } else {
-            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "MyDownloader").apply { mkdirs() }
+            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Download Goblin").apply { mkdirs() }
             val dest = File(dir, file.name)
             file.copyTo(dest, overwrite = true)
             FileProvider.getUriForFile(this, "${packageName}.provider", dest)
